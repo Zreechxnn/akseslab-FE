@@ -4,34 +4,30 @@ import { CONFIG } from '@/lib/config';
 import { createSignalRConnection } from '@/lib/signalr';
 import { HubConnectionState } from "@microsoft/signalr";
 import { useAktivitasFilter } from '@/hooks/useAktivitasFilter';
+import { exportAktivitasToExcel } from '@/lib/exportAktivitas';
 
 export default function AktivitasPage() {
-  // 1. State Data Utama
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 2. Gunakan Custom Hook Filter
+  // Hook Filter
   const { 
     options, 
     filters, 
     handleFilterChange, 
-    handleReset, 
     filteredData 
   } = useAktivitasFilter(data);
 
   const connectionRef = useRef(null);
 
-  // 3. Statistik
+  // --- Stats Calculation ---
   const stats = useMemo(() => {
     const total = filteredData.length;
-    
-    // Aktif = Belum Checkout atau Masuk == Keluar
     const active = filteredData.filter(i => {
        const hasOut = i.timestampKeluar && i.timestampKeluar !== '0001-01-01T00:00:00';
        return !hasOut || i.timestampMasuk === i.timestampKeluar;
     }).length;
 
-    // Hitung Rata-rata Durasi
     let totalDurasi = 0;
     let countSelesai = 0;
     const labCounts = {};
@@ -48,7 +44,6 @@ export default function AktivitasPage() {
 
     const avgDuration = countSelesai > 0 ? (totalDurasi / countSelesai / 60000).toFixed(0) + ' Menit' : '0 Menit';
     
-    // Lab Populer
     let popularLab = '-';
     let maxCount = 0;
     Object.entries(labCounts).forEach(([lab, count]) => {
@@ -58,53 +53,44 @@ export default function AktivitasPage() {
     return { total, active, avgDuration, popularLab };
   }, [filteredData]);
 
-  // --- Fetch Data & SignalR ---
+  // --- Fetch Data ---
   const fetchData = async () => {
-    const token = localStorage.getItem('authToken');
-    if (!token) return;
-    try {
-      setLoading(true);
-      const res = await fetch(`${CONFIG.BASE_URL}/api/Aktivitas`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const json = await res.json();
-      if (json.success) {
-        setData(json.data.sort((a, b) => new Date(b.timestampMasuk) - new Date(a.timestampMasuk)));
-      }
-    } catch (error) {
-      console.error("Error loading activities", error);
-    } finally {
-      setLoading(false);
-    }
+     const token = localStorage.getItem('authToken');
+     if (!token) return;
+     try {
+       setLoading(true);
+       const res = await fetch(`${CONFIG.BASE_URL}/api/Aktivitas`, {
+         headers: { 'Authorization': `Bearer ${token}` }
+       });
+       const json = await res.json();
+       if (json.success) {
+         setData(json.data.sort((a, b) => new Date(b.timestampMasuk) - new Date(a.timestampMasuk)));
+       }
+     } catch (error) { console.error(error); } finally { setLoading(false); }
   };
 
   useEffect(() => {
     fetchData();
-
-    // SignalR Setup
     const token = localStorage.getItem('authToken');
     if (!token) return;
+    
     const connection = createSignalRConnection(token);
     connectionRef.current = connection;
-
+    
     const startSignalR = async () => {
       if (connection.state === HubConnectionState.Disconnected) {
         try {
           await connection.start();
-          connection.on("ReceiveCheckIn", fetchData); // Reuse fetchData
+          connection.on("ReceiveCheckIn", fetchData);
           connection.on("ReceiveCheckOut", fetchData);
         } catch (e) { console.error("SignalR Error", e); }
       }
     };
     setTimeout(startSignalR, 1000);
-
     return () => { if(connection) connection.stop().catch(() => {}); };
   }, []);
 
-  // --- Handlers ---
-  const handleRefresh = () => {
-    fetchData();
-  };
+  const handleRefresh = () => fetchData();
 
   const handleDelete = async (id) => {
     if(!confirm("Hapus data ini?")) return;
@@ -114,65 +100,48 @@ export default function AktivitasPage() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (res.ok) {
-        setData(prev => prev.filter(i => i.id !== id));
-      }
+      if (res.ok) setData(prev => prev.filter(i => i.id !== id));
     } catch (e) { console.error(e); }
   };
 
-  const handleExport = () => {
-    if (filteredData.length === 0) return alert("Tidak ada data");
-    let csv = "No,UID Kartu,Lab,Pemilik,Masuk,Keluar,Status\n";
-    filteredData.forEach((item, index) => {
-        const masuk = new Date(item.timestampMasuk).toLocaleString('id-ID');
-        const keluar = item.timestampKeluar ? new Date(item.timestampKeluar).toLocaleString('id-ID') : '-';
-        const status = (item.timestampKeluar && item.timestampMasuk !== item.timestampKeluar) ? "CHECK OUT" : "CHECK IN";
-        const pemilik = item.userUsername ? `User: ${item.userUsername}` : (item.kelasNama ? `Kelas: ${item.kelasNama}` : '-');
-        csv += `${index+1},'${item.kartuUid},"${item.ruanganNama}","${pemilik}","${masuk}","${keluar}",${status}\n`;
-    });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `Laporan_Aktivitas_${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportClick = () => {
+    exportAktivitasToExcel(filteredData);
   };
 
-  // Helper UI Format
+  // Helper UI
   const formatTime = (iso) => !iso ? '-' : new Date(iso).toLocaleString('id-ID', {
     day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute:'2-digit'
   });
-
+  
   const getDuration = (start, end) => {
     const dEnd = new Date(end);
-    // Cek tahun 1 atau invalid
     if (!end || start === end || dEnd.getFullYear() === 1) return '-';
-    
     const diff = Math.floor((dEnd - new Date(start)) / 60000);
     return diff < 60 ? `${diff} Menit` : `${Math.floor(diff/60)} Jam ${diff%60} Menit`;
   };
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-10 font-sans">
-      
-      {/* 1. Page Title Badge */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-700 bg-white px-5 py-2 rounded-xl shadow-sm inline-block border border-gray-100">
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+        <h1 className="text-xl font-bold text-gray-700 bg-white px-5 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-2">
+          <i className="fas fa-chart-line text-blue-600"></i> 
           Aktivitas Lab
         </h1>
       </div>
 
-      {/* 2. Filter & Stats Container */}
+      {/* Filter & Stats Container */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
         
-        {/* Filter Row */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* PERBAIKAN: Layout Grid jadi 6 Kolom & Tambah Filter User */}
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <SelectBox label="Lab" name="lab" val={filters.lab} fn={handleFilterChange} opts={options.labs} k="nama" />
           <SelectBox label="Kelas" name="kelas" val={filters.kelas} fn={handleFilterChange} opts={options.kelas} k="nama" />
+          {/* Filter User Ditambahkan Kembali */}
+          <SelectBox label="User" name="user" val={filters.user} fn={handleFilterChange} opts={options.users} k="username" />
+          
           <DateInput label="Tanggal Mulai" name="startDate" val={filters.startDate} fn={handleFilterChange} />
           <DateInput label="Tanggal Sampai" name="endDate" val={filters.endDate} fn={handleFilterChange} />
+          
           <div className="flex flex-col">
             <label className="text-sm font-bold text-gray-800 mb-1">Status</label>
             <div className="relative">
@@ -186,7 +155,6 @@ export default function AktivitasPage() {
           </div>
         </div>
 
-        {/* Stats Cards Row (Colorful) */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard title="Total Aktivitas" val={stats.total} bg="bg-blue-400" icon="fa-check-circle" />
           <StatCard title="Sedang Aktif" val={stats.active} bg="bg-orange-300" icon="fa-door-open" />
@@ -195,16 +163,14 @@ export default function AktivitasPage() {
         </div>
       </div>
 
-      {/* 3. Table Container */}
+      {/* Table Container */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        
-        {/* Table Header & Buttons */}
         <div className="px-6 py-5 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
             <i className="fas fa-list-ul text-gray-600"></i> Daftar Aktivitas Lab
           </h3>
           <div className="flex gap-2">
-            <button onClick={handleExport} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-50 transition flex items-center gap-2 shadow-sm">
+            <button onClick={handleExportClick} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-50 transition flex items-center gap-2 shadow-sm">
                Export excel <i className="fas fa-download"></i>
             </button>
             <button onClick={handleRefresh} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-50 transition flex items-center gap-2 shadow-sm">
@@ -213,7 +179,6 @@ export default function AktivitasPage() {
           </div>
         </div>
 
-        {/* Table Content */}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -238,13 +203,11 @@ export default function AktivitasPage() {
                 filteredData.map((item, idx) => {
                   const hasOut = item.timestampKeluar && item.timestampKeluar !== '0001-01-01T00:00:00';
                   const isOut = hasOut && item.timestampMasuk !== item.timestampKeluar;
-                  
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 transition-colors">
                       <td className="p-4 text-center text-gray-500 font-medium">{idx + 1}</td>
                       <td className="p-4 font-mono font-bold text-red-500 tracking-wide text-xs md:text-sm">
-                        {/* Format Kartu ID agar ada spasi seperti gambar (Optional) */}
-                        {item.kartuUid.split(':').join(' : ')}
+                        {item.kartuUid ? item.kartuUid.split(':').join(' : ') : '-'}
                       </td>
                       <td className="p-4 font-bold text-gray-800">{item.ruanganNama}</td>
                       <td className="p-4 text-gray-600">
@@ -254,7 +217,6 @@ export default function AktivitasPage() {
                       <td className="p-4 text-gray-500 text-xs md:text-sm">{hasOut ? formatTime(item.timestampKeluar) : '-'}</td>
                       <td className="p-4 text-gray-600 font-medium text-xs md:text-sm">{getDuration(item.timestampMasuk, item.timestampKeluar)}</td>
                       <td className="p-4 text-center">
-                        {/* Logic Warna Badge Sesuai Gambar: CHECK OUT Hijau, CHECK IN Biru */}
                         <span className={`px-4 py-2 rounded-lg text-xs font-bold text-white shadow-sm inline-block min-w-[100px] ${
                           isOut ? 'bg-[#4ADE80]' : 'bg-[#3B82F6]'
                         }`}>
@@ -278,8 +240,7 @@ export default function AktivitasPage() {
   );
 }
 
-// --- Reusable Components (Styled like Reference) ---
-
+// --- Reusable Components ---
 function SelectBox({ label, name, val, fn, opts, k }) {
   return (
     <div className="flex flex-col">
@@ -294,7 +255,6 @@ function SelectBox({ label, name, val, fn, opts, k }) {
     </div>
   )
 }
-
 function DateInput({ label, name, val, fn }) {
   return (
     <div className="flex flex-col">
@@ -303,12 +263,10 @@ function DateInput({ label, name, val, fn }) {
     </div>
   )
 }
-
 function StatCard({ title, val, bg, icon }) {
   return (
     <div className={`${bg} rounded-xl p-5 flex items-center gap-4 text-white shadow-md min-h-[100px]`}>
         <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-             {/* Icon stroke effect */}
              <i className={`fas ${icon} text-2xl opacity-90`}></i>
         </div>
         <div>

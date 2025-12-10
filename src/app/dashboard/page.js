@@ -7,10 +7,9 @@ import { HubConnectionState } from "@microsoft/signalr";
 import AccessChart from '@/components/AccessChart';
 
 export default function DashboardPage() {
-  // State Utama
   const [stats, setStats] = useState({ totalRuangan: 0, aktifSekarang: 0, totalKelas: 0, totalAkses: 0 });
   const [chartData, setChartData] = useState([]);
-  const [chartMode, setChartMode] = useState('monthly'); // 'monthly' atau 'daily'
+  const [chartMode, setChartMode] = useState('monthly');
   
   const isMounted = useRef(false);
   const connectionRef = useRef(null);
@@ -18,7 +17,6 @@ export default function DashboardPage() {
 
   const getAuthToken = () => localStorage.getItem('authToken');
 
-  // 1. Fetch Stats Cards (Ringkasan)
   const fetchStats = async () => {
     try {
       const token = getAuthToken();
@@ -31,7 +29,6 @@ export default function DashboardPage() {
     } catch (err) { console.error(err); }
   };
 
-  // 2. Fetch Chart Data (Grafik)
   const fetchChartData = async (mode) => {
     try {
       const token = getAuthToken();
@@ -45,7 +42,6 @@ export default function DashboardPage() {
       const json = await res.json();
 
       if (json.success && isMounted.current) {
-        // Mapping data agar formatnya seragam untuk Recharts (name & value)
         const formattedData = json.data.map(item => ({
           name: mode === 'monthly' ? item.bulan : item.tanggal,
           value: item.total
@@ -55,7 +51,6 @@ export default function DashboardPage() {
     } catch (err) { console.error("Gagal load chart", err); }
   };
 
-  // Efek ganti mode grafik
   useEffect(() => {
     if(isMounted.current) {
         fetchChartData(chartMode);
@@ -68,9 +63,8 @@ export default function DashboardPage() {
     if (!token) { router.push('/'); return; }
 
     fetchStats();
-    fetchChartData('monthly'); // Load default chart
+    fetchChartData('monthly'); 
 
-    // --- SignalR Setup (Sama seperti sebelumnya) ---
     const connection = createSignalRConnection(token);
     connectionRef.current = connection;
 
@@ -82,10 +76,8 @@ export default function DashboardPage() {
                     await connection.invoke("JoinDashboard");
                 }
 
-                // Listeners
                 connection.on("ReceiveDashboardStats", (data) => isMounted.current && setStats(data));
                 
-                // Jika ada aktivitas tap, refresh chart juga agar realtime
                 const refreshAll = () => {
                     fetchStats();
                     fetchChartData(chartMode);
@@ -95,7 +87,6 @@ export default function DashboardPage() {
                 connection.on("ReceiveCheckIn", refreshAll);
                 connection.on("ReceiveCheckOut", refreshAll);
                 
-                // Silencers
                 connection.on("UserStatusChanged", () => {});
             }
         } catch (e) { /* ignore */ }
@@ -107,12 +98,13 @@ export default function DashboardPage() {
         isMounted.current = false;
         if (connection) connection.stop().catch(() => {});
     };
-  }, []); // Hapus dependency chartMode dari sini agar tidak loop
+  }, []); 
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold text-gray-700 bg-white px-4 py-1.5 rounded-lg shadow-sm">Dashboard</h2>
+        <h1 className="text-xl font-bold text-gray-700 bg-white px-5 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-2">
+          <i className="fas fa-home text-indigo-600"></i>Dashboard</h1>
         <div className="text-xs font-mono text-green-600 bg-green-100 px-2 py-1 rounded border border-green-200 flex items-center gap-2">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -138,7 +130,7 @@ export default function DashboardPage() {
             <p className="text-xs text-gray-400">Trend akses lab</p>
           </div>
           
-          {/* Tombol Switch Grafik */}
+          {/* Switch */}
           <div className="bg-gray-100 p-1 rounded-lg flex text-xs font-medium">
             <button 
               onClick={() => setChartMode('monthly')}
