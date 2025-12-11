@@ -9,7 +9,6 @@ export default function RootLayout({ children }) {
   return (
     <html lang="id">
       <head>
-        {/* Menggunakan CDN FontAwesome agar icon lama tetap jalan */}
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
       </head>
       <body className="bg-[#fbfbfb] font-sans antialiased">
